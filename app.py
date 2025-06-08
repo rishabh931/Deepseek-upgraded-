@@ -98,10 +98,17 @@ def get_financials(ticker_symbol):
         
         # Calculate metrics
         financial_data['OPM %'] = (financial_data['Operating Profit'] / financial_data['Revenue']) * 100
-        financial_data['EPS Growth %'] = [0] + [((financial_data['EPS'][i] - financial_data['EPS'][i-1]) / 
-                                               abs(financial_data['EPS'][i-1]) * 100 
-                                              if financial_data['EPS'][i-1] != 0 else 0
-                                              for i in range(1, len(financial_data['EPS']))]
+        
+        # Fixed EPS Growth % calculation
+        eps_growth = [0]
+        for i in range(1, len(financial_data['EPS'])):
+            if financial_data['EPS'][i-1] != 0:
+                growth = ((financial_data['EPS'][i] - financial_data['EPS'][i-1]) / 
+                          abs(financial_data['EPS'][i-1]) * 100)
+            else:
+                growth = 0
+            eps_growth.append(growth)
+        financial_data['EPS Growth %'] = eps_growth
         
         # Get years
         years = income_stmt.columns[:4].strftime('%Y').values[::-1]
@@ -119,29 +126,55 @@ def generate_analysis(df, years):
     rev_growth = df['Revenue'].pct_change().dropna() * 100
     insights.append("**Revenue Analysis:**")
     insights.append(f"- Latest revenue: {format_number(df['Revenue'].iloc[-1])}")
-    insights.append(f"- 4-year CAGR: {((df['Revenue'].iloc[-1]/df['Revenue'].iloc[0])**(1/3)-1)*100:.1f}%")
-    insights.append(f"- Trend: {'Growth' if rev_growth.mean() > 0 else 'Decline'} averaging {rev_growth.mean():.1f}% YoY")
+    
+    if len(df) > 1:
+        cagr = ((df['Revenue'].iloc[-1] / df['Revenue'].iloc[0]) ** (1/(len(df)-1)) - 1) * 100
+        insights.append(f"- {len(df)}-year CAGR: {cagr:.1f}%")
+        insights.append(f"- Trend: {'Growth' if rev_growth.mean() > 0 else 'Decline'} averaging {rev_growth.mean():.1f}% YoY")
+    else:
+        insights.append("- Not enough data to compute growth rates")
     
     # OPM analysis
-    opm_trend = "improving" if df['OPM %'].iloc[-1] > df['OPM %'].iloc[0] else "declining"
     insights.append("\n**Operating Profit Analysis:**")
     insights.append(f"- Current OPM: {df['OPM %'].iloc[-1]:.1f}%")
-    insights.append(f"- Trend: {opm_trend} ({df['OPM %'].iloc[0]:.1f}% → {df['OPM %'].iloc[-1]:.1f}%)")
-    insights.append(f"- Operating leverage: {((df['Operating Profit'].pct_change().mean() - df['Revenue'].pct_change().mean()))*100:.1f}%")
+    
+    if len(df) > 1:
+        opm_trend = "improving" if df['OPM %'].iloc[-1] > df['OPM %'].iloc[0] else "declining"
+        insights.append(f"- Trend: {opm_trend} ({df['OPM %'].iloc[0]:.1f}% → {df['OPM %'].iloc[-1]:.1f}%)")
+        
+        if df['Revenue'].pct_change().mean() != 0:
+            operating_leverage = ((df['Operating Profit'].pct_change().mean() - 
+                                  df['Revenue'].pct_change().mean())) * 100
+            insights.append(f"- Operating leverage: {operating_leverage:.1f}%")
+    else:
+        insights.append("- Not enough data to analyze trends")
     
     # PAT analysis
-    pat_growth = df['PAT'].pct_change().dropna() * 100
     insights.append("\n**Profit After Tax Analysis:**")
     insights.append(f"- Latest PAT: {format_number(df['PAT'].iloc[-1])}")
-    insights.append(f"- 4-year CAGR: {((df['PAT'].iloc[-1]/df['PAT'].iloc[0])**(1/3)-1)*100:.1f}%")
-    insights.append(f"- Margin trend: {'Expanding' if (df['PAT']/df['Revenue']).iloc[-1] > (df['PAT']/df['Revenue']).iloc[0] else 'Contracting'}")
+    
+    if len(df) > 1:
+        pat_cagr = ((df['PAT'].iloc[-1] / df['PAT'].iloc[0]) ** (1/(len(df)-1)) - 1) * 100
+        insights.append(f"- {len(df)}-year CAGR: {pat_cagr:.1f}%")
+        
+        margin_current = (df['PAT'] / df['Revenue']).iloc[-1]
+        margin_initial = (df['PAT'] / df['Revenue']).iloc[0]
+        margin_trend = 'Expanding' if margin_current > margin_initial else 'Contracting'
+        insights.append(f"- Margin trend: {margin_trend} ({margin_initial*100:.1f}% → {margin_current*100:.1f}%)")
+    else:
+        insights.append("- Not enough data to analyze profit trends")
     
     # EPS analysis
-    eps_growth = df['EPS Growth %'].dropna()
     insights.append("\n**EPS Analysis:**")
     insights.append(f"- Latest EPS: ₹{df['EPS'].iloc[-1]:.1f}")
-    insights.append(f"- 3-year average growth: {eps_growth.mean():.1f}%")
-    insights.append(f"- Growth consistency: {'Stable' if eps_growth.std() < 15 else 'Volatile'}")
+    
+    if len(df) > 1:
+        eps_growth = df['EPS Growth %'].dropna()
+        if len(eps_growth) > 0:
+            insights.append(f"- Average growth: {eps_growth.mean():.1f}%")
+            insights.append(f"- Growth consistency: {'Stable' if eps_growth.std() < 15 else 'Volatile'}")
+    else:
+        insights.append("- Not enough data to analyze EPS growth")
     
     return "\n".join(insights)
 
@@ -206,7 +239,10 @@ if stock_query:
                     ax2.plot(x, financial_df['OPM %'], 'r-o', linewidth=2, label='OPM %')
                     ax2.set_ylabel('OPM %', color='red')
                     ax2.tick_params(axis='y', labelcolor='red')
-                    ax2.set_ylim(0, max(financial_df['OPM %']) * 1.5)
+                    
+                    # Set y-axis limits dynamically
+                    if max(financial_df['OPM %']) > 0:
+                        ax2.set_ylim(0, max(financial_df['OPM %']) * 1.5)
                     
                     plt.title(f'{stock_query} Revenue & Profitability')
                     plt.xticks(x, years)
